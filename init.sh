@@ -2,9 +2,13 @@
 ###################
 ###     SSH     ###
 ###################
-SSH_KEY=${1:-"id_ed25519"}
-SSH_KEYPATH="$HOME/.ssh/$SSH_KEY"
-SSH_FINGERPRINT=$(ssh-keygen -l -E md5 -f "$SSH_KEYPATH.pub" | awk '{ print $2 }' | cut -c 5-)
+
+DROPLET_TAG='RicardoHome'
+DROPLET_NAME="${DROPLET_TAG/_/-}"
+echo -e 'n\n' | ssh-keygen -t rsa -f ~/.ssh/${DROPLET_NAME} -P "" -C "${DROPLET_NAME}"
+SSH_KEYPATH="$HOME/.ssh/$DROPLET_NAME"
+SSH_FINGERPRINT=$(ssh-keygen -l -E md5 -f "$SSH_KEYPATH.pub" | awk '{ print $2 }' | sed 's|MD5:||')
+
 
 ###################
 ###   DROPLET   ###
@@ -122,6 +126,7 @@ function check_for_active_droplet {
 # Creates a new wireguard droplet
 #######################################
 function create_droplet {
+    doctl compute ssh-key create ${DROPLET_NAME} --public-key "$(cat ~/.ssh/${DROPLET_NAME}.pub)"
     echo "Creating droplet..."
     doctl compute droplet create \
         $NAME \
@@ -178,25 +183,42 @@ function wait_for_wireguard {
 #######################################
 function create_wireguard_client {
     umask 077
-    wg genkey | tee privatekey | wg pubkey > publickey
-    local CLIENT_PRIVATE_KEY=$(cat privatekey)
-    local SERVER_PUBLIC_KEY=$(exec_droplet "cat /publickey")
-    local TMP_FILE=$(tempfile)
+    sleep 60
+    local SERVER_PUBLIC_KEY=$(exec_droplet "cat /server.pub")
+    local GATEWAY_KEY=$(exec_droplet "cat /gateway.key")
+    local GATEWAY_FILE="gateway.conf"
 
-cat << EOF > $TMP_FILE
+    local MACBOOK_KEY=$(exec_droplet "cat /macbook.key")
+    local MACBOOK_FILE="macbook.conf"
+
+cat << EOF > $GATEWAY_FILE
 [Interface]
-Address = 10.0.0.2/32
+Address = 10.200.0.2/32
 Address = fd86:ea04:1111::2/128
-PrivateKey = $CLIENT_PRIVATE_KEY
+PostUp = iptables -t nat -A POSTROUTING -s 10.200.0.0/24 -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -j MASQUERADE
+PrivateKey = $GATEWAY_KEY
 DNS = 1.1.1.1
 
 [Peer]
 PublicKey = $SERVER_PUBLIC_KEY
 Endpoint = $IPv4:51820
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = 10.200.0.0/24,10.0.0.0/24,192.168.100.0/24,192.168.0.0/24
 EOF
 
-    sudo mv $TMP_FILE /etc/wireguard/wg0.conf
+cat << EOF > $MACBOOK_FILE
+[Interface]
+Address = 10.200.0.3/32
+Address = fd86:ea04:1111::3/128
+PrivateKey = $MACBOOK_KEY
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $SERVER_PUBLIC_KEY
+Endpoint = $IPv4:51820
+AllowedIPs = 10.200.0.0/24,10.0.0.0/24,192.168.100.0/24,192.168.0.0/24
+EOF
+
 }
 
 #######################################
@@ -225,8 +247,8 @@ function init {
     authorize_ssh_connection
     wait_for_wireguard
     create_wireguard_client
-    add_client_to_server
-    start_wireguard_connection
+    # add_client_to_server
+    # start_wireguard_connection
     exit 0
 }
 

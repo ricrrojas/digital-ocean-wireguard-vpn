@@ -85,23 +85,40 @@ sysctl -p
 ###  WIREGUARD  ###
 ###################
 
-add-apt-repository ppa:wireguard/wireguard -y
+# add-apt-repository ppa:wireguard/wireguard -y
 apt install wireguard -y
 
 umask 077
-wg genkey | tee privatekey | wg pubkey > publickey
+wg genkey | tee server.key | wg pubkey > server.pub
+wg genkey | tee gateway.key | wg pubkey > gateway.pub
+wg genkey | tee macbook.key | wg pubkey > macbook.pub
 
-PRIVATE_KEY=$(cat privatekey)
+PRIVATE_KEY=$(cat server.key)
+GATEWAY_KEY=$(cat gateway.pub)
+MACBOOK_KEY=$(cat macbook.pub)
 
 cat << EOF > /etc/wireguard/wg0.conf
 [Interface]
 PrivateKey = $PRIVATE_KEY
-Address = 10.0.0.1/24
+Address = 10.200.0.1/24
 Address = fd86:ea04:1111::1/64
 ListenPort = 51820
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; ip6tables -A FORWARD -i wg0 -j ACCEPT; ip6tables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE; ip6tables -D FORWARD -i wg0 -j ACCEPT; ip6tables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; ip6tables -A FORWARD -i wg0 -j ACCEPT; ip6tables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; iptables -t nat -A POSTROUTING -s 10.200.0.0/24 -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE; ip6tables -D FORWARD -i wg0 -j ACCEPT; ip6tables -t nat -D POSTROUTING -o eth0 -j MASQUERADE; iptables -t nat -D POSTROUTING -s 10.200.0.0/24 -o eth0 -j MASQUERADE
 SaveConfig = true
+
+# Gateway
+[Peer]
+# Put the contents of gateway.pub here
+PublicKey = $GATEWAY_KEY
+AllowedIPs = 10.200.0.2/32,10.0.0.0/24,192.168.100.0/24,192.168.0.0/24
+PersistentKeepalive = 25
+
+# mac
+[Peer]
+PublicKey = $MACBOOK_KEY
+AllowedIPs = 10.200.0.3/32,10.0.0.0/24,192.168.100.0/24,192.168.0.0/24
+PersistentKeepalive = 25
 EOF
 
 wg-quick up wg0
